@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -15,6 +15,9 @@ use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 use futures::stream::{SplitSink, SplitStream, StreamExt};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
+
+use crate::force_order::ForceOrder;
+mod force_order;
 
 enum Commands {
     GetStatus {
@@ -45,7 +48,6 @@ struct AxumState {
     engine_sender: Sender<Commands>
 }
 
-
 impl EngineActor {
     async fn run(mut self) {
         loop {
@@ -57,7 +59,6 @@ impl EngineActor {
                 Some(msg) = self.command_reciever.recv() => {
                     match msg {
                         Commands::GetStatus { respond_to } => {
-                            info!("Processed status request");
                             let _ = respond_to.send(self.state.clone());
                         },
                         Commands::Pause { respond_to } => {
@@ -77,8 +78,7 @@ impl EngineActor {
                             }
                         }
                         /*Commands::TestProduce => {
-                            let brokers = std::env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string());
-                            let topic = "test";
+                            
                             info!("Connecting to {}", brokers);
                             let _ = produce(&brokers, topic).await;
                         }*/
@@ -88,7 +88,23 @@ impl EngineActor {
         }
     }
     async fn process_message(&mut self, msg: Message) {
-        info!("{}", msg.to_text().unwrap());
+        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string());
+
+        let json_msg = &msg.into_text().unwrap();
+
+        // Best effort to deserialize, else drop
+        if let Ok(data) = serde_json::from_str::<ForceOrder>(&json_msg) {
+            // Currency Symbol as topic key
+            let symbol_key = data.o.s.as_str();
+
+            // When Biannce Event happened
+            let event_time = data.e2 as u64;
+
+            // When Producer pushed to broker
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+
+            let _ = push_to_topic(&brokers, symbol_key, json_msg, event_time, now).await;
+        }
     }
 }
 
@@ -103,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
     let (ws_stream, _) = connect_async(force_order_url).await?;
     let (write, read) = ws_stream.split();
 
-    info!("Producer connected to Binance Futures");
+    info!("Producer connected to Binance Futures Stream");
 
     let actor = EngineActor{ 
         command_reciever: rx,
@@ -159,37 +175,26 @@ async fn resume(State(state):State<AxumState>) -> StatusCode {
     }
 }
 
-// The produce function stays exactly the same
-async fn push_to_topic(brokers: &str, topic_name: &str) -> anyhow::Result<()> {
+async fn push_to_topic(brokers: &str, key: &str, message: &str, event_start: u64, event_end: u64) -> anyhow::Result<()> {
     let producer: &FutureProducer = &ClientConfig::new()
         .set("bootstrap.servers", brokers)
         .set("message.timeout.ms", "5000")
         .create()
         .expect("Producer creation error");
 
-    let futures = (0..5)
-        .map(|i| async move {
-            let delivery_status = producer
-                .send(
-                    FutureRecord::to(topic_name)
-                        .payload(&format!("Message {}", i))
-                        .key(&format!("Key {}", i))
-                        .headers(OwnedHeaders::new().insert(Header {
-                            key: "header_key",
-                            value: Some("header_value"),
-                        })),
-                    Duration::from_secs(0),
-                )
-                .await;
+    let delivery_status = producer
+        .send(
+        FutureRecord::to("binance-liquidations")
+            .key(key) 
+            .payload(message)
+            .headers(OwnedHeaders::new()
+                .insert(Header { key: "source", value: Some("binance_websocket") })
+                .insert(Header { key: "event_ts", value: Some(&event_start.to_string()) })
+                .insert(Header { key: "ingest_ts", value: Some(&event_end.to_string()) })
+            ),
+        Duration::from_secs(0),
+        ).await;
 
-            info!("Delivery status for message {} received", i);
-            delivery_status
-        })
-        .collect::<Vec<_>>();
-
-    for future in futures {
-        info!("Future completed. Result: {:?}", future.await);
-    }
-
+    info!("Future completed. Result: {:?}", delivery_status);
     Ok(())
 }
