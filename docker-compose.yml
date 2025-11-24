@@ -55,15 +55,15 @@ services:
     depends_on:
       - kafka
 
-  processor:
-    build: ./processor
-    ports:
-      - 3002:3001
-    environment:
-      - KAFKA_BROKERS=kafka:9093
-      - RUST_LOG=info
-    depends_on:
-      - kafka
+  #processor:
+  #  build: ./processor
+  #  ports:
+  #    - 3002:3001
+  #  environment:
+  #    - KAFKA_BROKERS=kafka:9093
+  #    - RUST_LOG=info
+  #  depends_on:
+  #    - kafka
 
 volumes:
   kafka-data:

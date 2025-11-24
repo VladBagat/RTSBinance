@@ -1,4 +1,5 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
+use apache_avro::{Schema, to_avro_datum, to_value};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -16,7 +17,8 @@ use futures::stream::{SplitSink, SplitStream, StreamExt};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::force_order::ForceOrder;
+
+use crate::force_order::{ForceOrder, ForceOrderFlat};
 mod force_order;
 
 enum Commands {
@@ -38,9 +40,12 @@ struct EngineActor {
     state: EngineState
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct EngineState {
     paused: bool,
+    force_order_avro_schema: Option<Schema>,
+    brokers: String,
+    producer: Option<FutureProducer>
 }
 
 #[derive(Clone)]
@@ -77,18 +82,14 @@ impl EngineActor {
                                 let _ = respond_to.send(true);
                             }
                         }
-                        /*Commands::TestProduce => {
-                            
-                            info!("Connecting to {}", brokers);
-                            let _ = produce(&brokers, topic).await;
-                        }*/
                     }
                 }
             }
         }
     }
     async fn process_message(&mut self, msg: Message) {
-        let brokers = std::env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string());
+        // ts when Producer recieved message
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
 
         let json_msg = &msg.into_text().unwrap();
 
@@ -100,11 +101,63 @@ impl EngineActor {
             // When Biannce Event happened
             let event_time = data.e2 as u64;
 
-            // When Producer pushed to broker
-            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+            let flat = ForceOrderFlat {
+                e: data.e,
+                e2: data.e2,
+                s: data.o.s.clone(),
+                s2: data.o.s2,
+                o: data.o.o,
+                f: data.o.f,
+                q: data.o.q.parse().expect("q of wrong format"),
+                p: data.o.p.parse().expect("p of wrong format"),
+                ap: data.o.ap.parse().expect("ap of wrong format"),
+                x: data.o.x,
+                l: data.o.l.parse().expect("l of wrong format"),
+                z: data.o.z.parse().expect("z of wrong format"),
+                t: data.o.t,
+            };
 
-            let _ = push_to_topic(&brokers, symbol_key, json_msg, event_time, now).await;
+            let schema = self.state.force_order_avro_schema.as_mut().expect("Avro scheme failed to initialize");
+            let avro_value = to_value(&flat).expect("serde -> Avro Value failed");
+            let encoded = to_avro_datum(schema, avro_value).expect("Non-compliance with Avro scheme. Bad sanitization.");
+
+            if let Err(e) = self.push_to_topic(symbol_key, &encoded, event_time, now).await {
+                info!("Failed to push to topic: {:?}", e);
+            }
         }
+    }
+
+    fn engine_startup(&mut self) {
+        self.state.force_order_avro_schema = Some(force_order::get_avro_schema());
+
+        let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", &self.state.brokers)
+        .set("message.timeout.ms", "5000")
+        .create()
+        .expect("Producer creation error");
+
+        self.state.producer = Some(producer);
+    }
+
+    async fn push_to_topic(&mut self, key: &str, message: &Vec<u8>, event_time: u64, process_start: u64) -> anyhow::Result<()> {
+        // ts when Producer ingested message
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+
+        let record = FutureRecord::to("binance-liquidations")
+                .key(key)
+                .payload(message)
+                .headers(OwnedHeaders::new()
+                    .insert(Header { key: "source", value: Some("binance_websocket") })
+                    .insert(Header { key: "event_ts", value: Some(&event_time.to_string()) })
+                    .insert(Header { key: "recieval_ts", value: Some(&process_start.to_string()) })
+                    .insert(Header { key: "ingest_ts", value: Some(&now.to_string()) })
+                );
+
+        if let Err(e) = self.state.producer.as_ref().unwrap().send_result(record) {
+            info!("Message send failed.{:?}", e);
+        }
+
+        Ok(())
     }
 }
 
@@ -121,12 +174,20 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Producer connected to Binance Futures Stream");
 
-    let actor = EngineActor{ 
+    let mut actor = EngineActor{ 
         command_reciever: rx,
         ws_write: write,
         ws_read: read,
-        state: EngineState { paused: true }
+        state: EngineState { 
+            paused: true,
+            force_order_avro_schema: None,
+            brokers:std::env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string()),
+            producer: None
+        }
     };
+
+    actor.engine_startup();
+
     tokio::spawn(actor.run());
 
     let state = AxumState {
@@ -175,26 +236,3 @@ async fn resume(State(state):State<AxumState>) -> StatusCode {
     }
 }
 
-async fn push_to_topic(brokers: &str, key: &str, message: &str, event_start: u64, event_end: u64) -> anyhow::Result<()> {
-    let producer: &FutureProducer = &ClientConfig::new()
-        .set("bootstrap.servers", brokers)
-        .set("message.timeout.ms", "5000")
-        .create()
-        .expect("Producer creation error");
-
-    let delivery_status = producer
-        .send(
-        FutureRecord::to("binance-liquidations")
-            .key(key) 
-            .payload(message)
-            .headers(OwnedHeaders::new()
-                .insert(Header { key: "source", value: Some("binance_websocket") })
-                .insert(Header { key: "event_ts", value: Some(&event_start.to_string()) })
-                .insert(Header { key: "ingest_ts", value: Some(&event_end.to_string()) })
-            ),
-        Duration::from_secs(0),
-        ).await;
-
-    info!("Future completed. Result: {:?}", delivery_status);
-    Ok(())
-}

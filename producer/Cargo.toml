@@ -17,3 +17,4 @@ rustls = { version = "0.23", features = ["ring","logging","tls12"], default-feat
 tokio-tungstenite = { version = "0.23", features = ["rustls-tls-webpki-roots"] }
 serde_json = "1.0.145"
 serde_derive = "1.0.228"
+apache-avro = "0.21.0"
