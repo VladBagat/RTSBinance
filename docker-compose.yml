@@ -23,6 +23,8 @@ services:
       KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:9093
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,DOCKER:PLAINTEXT,HOST:PLAINTEXT
 
+      KAFKA_LOG4J_ROOT_LOGLEVEL: 'WARN'
+      KAFKA_LOG4J_LOGGERS: 'kafka=WARN,kafka.controller=WARN,kafka.log.LogCleaner=WARN,state.change.logger=WARN,kafka.producer.async.DefaultEventHandler=WARN'
       # Settings required for KRaft mode
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -42,6 +44,9 @@ services:
       DYNAMIC_CONFIG_ENABLED: "true"
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9093
+
+      LOGGING_LEVEL_ROOT: ERROR
+      LOGGING_LEVEL_IO_KAFBAT_UI: ERROR 
     depends_on:
       - kafka
 
@@ -55,15 +60,15 @@ services:
     depends_on:
       - kafka
 
-  #processor:
-  #  build: ./processor
-  #  ports:
-  #    - 3002:3001
-  #  environment:
-  #    - KAFKA_BROKERS=kafka:9093
-  #    - RUST_LOG=info
-  #  depends_on:
-  #    - kafka
+  processor:
+    build: ./processor
+    ports:
+      - 3001:3001
+    environment:
+      - KAFKA_BROKERS=kafka:9093
+      - RUST_LOG=info
+    depends_on:
+      - kafka
 
 volumes:
   kafka-data:
