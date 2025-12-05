@@ -1,5 +1,8 @@
 services:
-
+  nginx:
+    build: ./nginx
+    ports:
+      - 8000:80
   init-kafka:
       image: alpine
       command: chown -R 1000:1000 /kafka
