@@ -1,13 +1,11 @@
 services:
-  nginx:
-    build: ./nginx
-    ports:
-      - 8000:80
   init-kafka:
       image: alpine
       command: chown -R 1000:1000 /kafka
       volumes:
         - kafka-data:/kafka
+      networks:
+        - api_network
   kafka:
     image: apache/kafka-native
     volumes:
@@ -39,6 +37,8 @@ services:
 
       # Required for a single node cluster
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - api_network
   kafka-ui:
     image: kafbat/kafka-ui:main
     ports:
@@ -52,7 +52,8 @@ services:
       LOGGING_LEVEL_IO_KAFBAT_UI: ERROR 
     depends_on:
       - kafka
-
+    networks:
+      - api_network
   producer:
     build: ./producer
     ports:
@@ -62,7 +63,8 @@ services:
       - RUST_LOG=info
     depends_on:
       - kafka
-
+    networks:
+      - api_network
   processor:
     build: ./processor
     ports:
@@ -72,6 +74,20 @@ services:
       - RUST_LOG=info
     depends_on:
       - kafka
+    networks:
+      - api_network
+  nginx:
+    build: ./nginx
+    ports:
+      - 8000:80
+    depends_on:
+      - producer
+      - processor
+    networks:
+      - api_network
 
 volumes:
   kafka-data:
+
+networks:
+  api_network:
