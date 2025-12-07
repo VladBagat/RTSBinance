@@ -1,8 +1,7 @@
 FROM rust:alpine AS builder
 WORKDIR /producer
-# Install C build toolchain and library dependencies
-RUN apk add --no-cache build-base cmake pkgconf openssl-dev cyrus-sasl-dev zlib-dev zlib-static \
-    ca-certificates openssl curl
+RUN apk add --no-cache build-base cmake pkgconf openssl-dev cyrus-sasl-dev zlib-dev zlib-static
+COPY --from=shared . /producer/shared
 COPY . .
 RUN cargo install --path .
 

@@ -55,9 +55,11 @@ services:
     networks:
       - api_network
   producer:
-    build: ./producer
-    ports:
-      - 3000:3000
+    build: 
+      context: ./producer
+      dockerfile: Dockerfile
+      additional_contexts:
+        shared: ./shared
     environment:
       - KAFKA_BROKERS=kafka:9093
       - RUST_LOG=info
@@ -66,9 +68,11 @@ services:
     networks:
       - api_network
   processor:
-    build: ./processor
-    ports:
-      - 3001:3001
+    build:
+      context: ./processor
+      dockerfile: Dockerfile
+      additional_contexts:
+        shared: ./shared
     environment:
       - KAFKA_BROKERS=kafka:9093
       - RUST_LOG=info

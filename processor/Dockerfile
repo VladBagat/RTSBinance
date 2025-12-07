@@ -1,7 +1,7 @@
 FROM rust:alpine AS builder
 WORKDIR /processor
-# Install C build toolchain and library dependencies
 RUN apk add --no-cache build-base cmake pkgconf openssl-dev cyrus-sasl-dev zlib-dev zlib-static
+COPY --from=shared . /processor/shared
 COPY . .
 RUN cargo install --path .
 
