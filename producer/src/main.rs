@@ -3,7 +3,7 @@ use apache_avro::{Schema, to_avro_datum, to_value};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
-use log::info;
+use log::{error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord};
@@ -138,7 +138,7 @@ impl EngineActor {
         self.state.producer = Some(producer);
     }
 
-    async fn push_to_topic(&mut self, key: &str, message: &Vec<u8>, event_time: u64, process_start: u64) -> anyhow::Result<()> {
+    async fn push_to_topic(&self, key: &str, message: &Vec<u8>, event_time: u64, process_start: u64) -> anyhow::Result<()> {
         // ts when Producer ingested message
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
 
@@ -153,7 +153,7 @@ impl EngineActor {
                 );
 
         if let Err(e) = self.state.producer.as_ref().unwrap().send_result(record) {
-            info!("Message send failed.{:?}", e);
+            error!("Message send failed.{:?}", e);
         }
 
         Ok(())
