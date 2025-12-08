@@ -109,6 +109,7 @@ impl EngineActor {
                 msg = consumer.recv() => {
                     match msg {
                         Ok(msg) => {
+                            if self.state.paused { continue; }
                             self.process_message(msg).await;
                         }
                         Err(e) => {
@@ -187,7 +188,6 @@ impl EngineActor {
     }
 
     async fn process_message(&mut self, message: BorrowedMessage<'_>) {
-        if self.state.paused { return; }
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
         let mut payload = message.payload().expect("Message has no payload");
         let schema = self.state.force_order_avro_schema.as_mut().expect("Avro scheme failed to initialize");
