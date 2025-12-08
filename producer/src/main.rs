@@ -3,6 +3,7 @@ use apache_avro::{Schema, to_avro_datum, to_value};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
+use futures::SinkExt;
 use log::{error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
@@ -10,9 +11,8 @@ use rdkafka::producer::{FutureProducer, FutureRecord};
 use axum::Router;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio::time::{interval, Duration};
+use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite::protocol::Message, MaybeTlsStream};
 use futures::stream::{SplitSink, SplitStream, StreamExt};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
@@ -54,11 +54,30 @@ struct AxumState {
 
 impl EngineActor {
     async fn run(mut self) {
+        let ping_interval = 5;
+        let mut ticker = interval(Duration::from_secs(ping_interval));
+
         loop {
             tokio::select! {
                 Some(Ok(msg)) = self.ws_read.next() => {
                     if self.state.paused { continue; }
                     self.process_message(msg).await;
+                }
+                _ = ticker.tick() => {
+                    if let Err(_) = self.ws_write.send(Message::Ping(vec![])).await {
+                        error!("Lost connection to Binance WebSocket. Reconnecting...");
+                        let force_order_url = "wss://fstream.binance.com/ws/!forceOrder@arr"; //TODO: Drops on connection loss. Must find a way to re-connect
+                        match connect_async(force_order_url).await {
+                            Ok((ws_stream, _)) => {
+                                let (write, read) = ws_stream.split();
+                                self.ws_read = read;
+                                self.ws_write = write;
+                            },
+                            Err(err) => {
+                                error!("Failed to reconnect. Trying in {} seconds. Error: {}", ping_interval, err);
+                            } 
+                        }
+                    }  
                 }
                 Some(msg) = self.command_reciever.recv() => {
                     match msg {
@@ -167,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (tx, rx) = mpsc::channel(128);
 
-    let force_order_url = "wss://fstream.binance.com/ws/!forceOrder@arr";
+    let force_order_url = "wss://fstream.binance.com/ws/!forceOrder@arr"; //TODO: Drops on connection loss. Must find a way to re-connect
     let (ws_stream, _) = connect_async(force_order_url).await?;
     let (write, read) = ws_stream.split();
 
