@@ -4,14 +4,14 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
 use futures::SinkExt;
-use log::{error, info};
+use log::{debug, error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use axum::Router;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval, timeout};
 use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite::protocol::Message, MaybeTlsStream};
 use futures::stream::{SplitSink, SplitStream, StreamExt};
 use std::net::SocketAddr;
@@ -69,23 +69,21 @@ impl EngineActor {
                             self.process_message(msg).await;
                         }
                         Some(Err(e)) => {
-                            info!("Some error runs");
                             error!("WebSocket read error: {:?}. Attempting reconnection...", e);
                             self.attempt_reconnect().await;
                         }
                         None => {
-                            info!("None error runs");
                             error!("WebSocket stream ended. Attempting reconnection...");
                             self.attempt_reconnect().await;
                         }
                     }
                 }
                 _ = ticker.tick() => {
-                    info!("Ticker runs");
                     let last_timestamp = self.state.last_processed_timestamp;
                     let cur_time = shared::current_time_micros!();
+                    debug!("{} - {} = {} > {}", cur_time, last_timestamp, cur_time-last_timestamp, timeout_threshold);
                     if cur_time - last_timestamp > timeout_threshold {
-                        if let Err(_) = self.ws_write.send(Message::Ping(vec![])).await {
+                        if let Err(_) = timeout(Duration::from_millis(750), self.ws_write.send(Message::Ping(vec![]))).await {
                             error!("No message processed in {}. Lost connection to Binance WebSocket. Reconnecting...", timeout_seconds);
                             self.attempt_reconnect().await;
                         }
