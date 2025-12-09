@@ -56,16 +56,13 @@ struct AxumState {
 
 impl EngineActor {
     async fn run(mut self) {
-        let timeout_threshold = 1_000_000;
-        let mut ticker = interval(Duration::from_micros(timeout_threshold));
-        let timeout_seconds = timeout_threshold / 1e6 as u64;
-
         loop {
             tokio::select! {
                 msg_result = self.ws_read.next() => {
                     match msg_result {
                         Some(Ok(msg)) => {
                             if self.state.paused { continue; }
+                            
                             self.process_message(msg).await;
                         }
                         Some(Err(e)) => {
@@ -77,18 +74,6 @@ impl EngineActor {
                             self.attempt_reconnect().await;
                         }
                     }
-                }
-                _ = ticker.tick() => {
-                    let last_timestamp = self.state.last_processed_timestamp;
-                    let cur_time = shared::current_time_micros!();
-                    debug!("{} - {} = {} > {}", cur_time, last_timestamp, cur_time-last_timestamp, timeout_threshold);
-                    if cur_time - last_timestamp > timeout_threshold {
-                        if let Err(_) = timeout(Duration::from_millis(750), self.ws_write.send(Message::Ping(vec![]))).await {
-                            error!("No message processed in {}. Lost connection to Binance WebSocket. Reconnecting...", timeout_seconds);
-                            self.attempt_reconnect().await;
-                        }
-                        // Socket is just boring
-                    }  
                 }
                 Some(msg) = self.command_reciever.recv() => {
                     match msg {
@@ -128,8 +113,8 @@ impl EngineActor {
                 info!("Reconnected to Binance WebSocket successfully.");
             },
             Err(err) => {
-                error!("Failed to reconnect. Retrying in 1 second. Error: {}.", err);
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                error!("Failed to reconnect. Retrying in 0.75 seconds. Error: {}.", err);
+                tokio::time::sleep(Duration::from_millis(750)).await;
             } 
         }
     }
@@ -148,7 +133,7 @@ impl EngineActor {
             // When Biannce Event happened
             let event_time = data.e2 as u64;
 
-            self.state.last_processed_timestamp = event_time;
+            self.state.last_processed_timestamp = now;
 
             let flat = ForceOrderFlat {
                 e: data.e,
