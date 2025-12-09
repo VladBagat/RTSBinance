@@ -8,6 +8,7 @@ use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::*;
 use rdkafka::error::KafkaResult;
 use axum::{Router, routing::post};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -49,7 +50,7 @@ struct EngineState {
     logging_state: LoggingState
 }
 
-#[derive(Clone, PartialEq, PartialOrd, Eq)]
+#[derive(Clone, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
 struct LoggingState {
     running_time: u64,
     successful_runs: u64,
@@ -120,7 +121,7 @@ impl EngineActor {
                 Some(msg) = self.command_reciever.recv() => {
                     match msg {
                         Commands::GetStatus { respond_to } => {
-                            let _ = respond_to.send(LoggingState::default());
+                            let _ = respond_to.send(self.state.logging_state.clone());
                         },
                         Commands::Pause { respond_to } => {
                             if self.state.paused {
@@ -188,7 +189,7 @@ impl EngineActor {
     }
 
     async fn process_message(&mut self, message: BorrowedMessage<'_>) {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        let now = shared::current_time_micros!();
         let mut payload = message.payload().expect("Message has no payload");
         let schema = self.state.force_order_avro_schema.as_mut().expect("Avro scheme failed to initialize");
         let value = from_avro_datum(schema, &mut payload, None).unwrap();
@@ -224,7 +225,7 @@ impl EngineActor {
 
     async fn push_to_topic(&self, key: &str, message: &Vec<u8>, process_start: u64) -> anyhow::Result<()> {
         // ts when Processor sends message
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        let now = shared::current_time_micros!();
 
         let record = FutureRecord::to("binance-liquidations-processed")
                 .key(key)

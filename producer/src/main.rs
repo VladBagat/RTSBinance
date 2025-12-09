@@ -3,22 +3,23 @@ use apache_avro::{Schema, to_avro_datum, to_value};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
-use log::{error, info};
+use futures::SinkExt;
+use log::{debug, error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use axum::Router;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use tokio::time::{Duration, interval, timeout};
+use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite::protocol::Message, MaybeTlsStream};
 use futures::stream::{SplitSink, SplitStream, StreamExt};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 
-
 use shared::force_order::{ForceOrder, ForceOrderFlat, get_avro_schema};
+
+static VERSION: i64 = 1;
 
 enum Commands {
     GetStatus {
@@ -44,7 +45,8 @@ struct EngineState {
     paused: bool,
     force_order_avro_schema: Option<Schema>,
     brokers: String,
-    producer: Option<FutureProducer>
+    producer: Option<FutureProducer>,
+    last_processed_timestamp: u64
 }
 
 #[derive(Clone)]
@@ -56,9 +58,22 @@ impl EngineActor {
     async fn run(mut self) {
         loop {
             tokio::select! {
-                Some(Ok(msg)) = self.ws_read.next() => {
-                    if self.state.paused { continue; }
-                    self.process_message(msg).await;
+                msg_result = self.ws_read.next() => {
+                    match msg_result {
+                        Some(Ok(msg)) => {
+                            if self.state.paused { continue; }
+                            
+                            self.process_message(msg).await;
+                        }
+                        Some(Err(e)) => {
+                            error!("WebSocket read error: {:?}. Attempting reconnection...", e);
+                            self.attempt_reconnect().await;
+                        }
+                        None => {
+                            error!("WebSocket stream ended. Attempting reconnection...");
+                            self.attempt_reconnect().await;
+                        }
+                    }
                 }
                 Some(msg) = self.command_reciever.recv() => {
                     match msg {
@@ -86,9 +101,27 @@ impl EngineActor {
             }
         }
     }
+
+    // Helper method to handle reconnection logic
+    async fn attempt_reconnect(&mut self) {
+        let force_order_url = "wss://fstream.binance.com/ws/!forceOrder@arr";
+        match connect_async(force_order_url).await {
+            Ok((ws_stream, _)) => {
+                let (write, read) = ws_stream.split();
+                self.ws_read = read;
+                self.ws_write = write;
+                info!("Reconnected to Binance WebSocket successfully.");
+            },
+            Err(err) => {
+                error!("Failed to reconnect. Retrying in 0.75 seconds. Error: {}.", err);
+                tokio::time::sleep(Duration::from_millis(750)).await;
+            } 
+        }
+    }
+
     async fn process_message(&mut self, msg: Message) {
         // ts when Producer recieved message
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        let now = shared::current_time_micros!();
 
         let json_msg = &msg.into_text().unwrap();
 
@@ -99,6 +132,8 @@ impl EngineActor {
 
             // When Biannce Event happened
             let event_time = data.e2 as u64;
+
+            self.state.last_processed_timestamp = now;
 
             let flat = ForceOrderFlat {
                 e: data.e,
@@ -140,7 +175,7 @@ impl EngineActor {
 
     async fn push_to_topic(&self, key: &str, message: &Vec<u8>, event_time: u64, process_start: u64) -> anyhow::Result<()> {
         // ts when Producer ingested message
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+        let now = shared::current_time_micros!();
 
         let record = FutureRecord::to("binance-liquidations")
                 .key(key)
@@ -163,11 +198,11 @@ impl EngineActor {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init(); 
-    info!("Producer started");
+    info!("Producer started. Version: {}", VERSION);
 
     let (tx, rx) = mpsc::channel(128);
 
-    let force_order_url = "wss://fstream.binance.com/ws/!forceOrder@arr";
+    let force_order_url = "wss://fstream.binance.com/ws/!forceOrder@arr"; //TODO: Drops on connection loss. Must find a way to re-connect
     let (ws_stream, _) = connect_async(force_order_url).await?;
     let (write, read) = ws_stream.split();
 
@@ -181,7 +216,8 @@ async fn main() -> anyhow::Result<()> {
             paused: true,
             force_order_avro_schema: None,
             brokers:std::env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string()),
-            producer: None
+            producer: None,
+            last_processed_timestamp: shared::current_time_micros!()
         }
     };
 
