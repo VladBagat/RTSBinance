@@ -61,6 +61,7 @@ services:
     environment:
       - KAFKA_BROKERS=kafka:9093
       - RUST_LOG=info
+      - PORT=4000
     depends_on:
       - kafka
     networks:
@@ -72,7 +73,14 @@ services:
     environment:
       - KAFKA_BROKERS=kafka:9093
       - RUST_LOG=info
+      - PORT=4001
     depends_on:
+      - kafka
+    networks:
+      - api_network
+  dashboard:
+    build: ./dashboard
+    depends_on: 
       - kafka
     networks:
       - api_network
@@ -83,6 +91,7 @@ services:
     depends_on:
       - producer
       - processor
+      - dashboard
     networks:
       - api_network
 

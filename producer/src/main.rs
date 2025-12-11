@@ -3,15 +3,15 @@ use apache_avro::{Schema, to_avro_datum, to_value};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
-use futures::SinkExt;
-use log::{debug, error, info};
+use std::env;
+use log::{error, info};
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use axum::Router;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{Duration, interval, timeout};
+use tokio::time::Duration;
 use tokio_tungstenite::{WebSocketStream, connect_async, tungstenite::protocol::Message, MaybeTlsStream};
 use futures::stream::{SplitSink, SplitStream, StreamExt};
 use std::net::SocketAddr;
@@ -234,7 +234,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/resume", post(resume))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let port: u16 = env::var("PORT").unwrap_or_else(|_| "4000".to_string()).parse().unwrap();
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
     info!("Producer Axum is ready to be served");

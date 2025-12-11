@@ -18,6 +18,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::Consumer;
+use std::env;
 
 
 use shared::{force_order, processed_force_order};
@@ -277,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
             paused: true,
             force_order_avro_schema: None,
             processed_avro_schema: None,
-            brokers:std::env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string()),
+            brokers:env::var("KAFKA_BROKERS").unwrap_or("localhost:9092".to_string()),
             consumer: None,
             producer: None,
             calculation_state: CalculationState::default(),
@@ -298,7 +299,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/resume", post(resume))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
+    let port: u16 = env::var("PORT").unwrap_or_else(|_| "4001".to_string()).parse().unwrap();
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
 
     info!("Processor #1 Axum is ready to be served");
