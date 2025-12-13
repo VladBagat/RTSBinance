@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let app = Router::new().route("/events", get(sse_events)).with_state(state);
+    let app = Router::new().route("/messages", get(sse_events)).with_state(state);
 
     let port: u16 = std::env::var("PORT")
         .unwrap_or_else(|_| "4010".to_string())

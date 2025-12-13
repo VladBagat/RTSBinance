@@ -1,6 +1,21 @@
 <script lang="ts">
-	import type { PageData } from './$types';
-	export let data: PageData;
+	import { onMount } from 'svelte';
+
+	let events: string[] = [];
+
+	onMount(() => {
+		const es = new EventSource('/kafka-sink/messages');
+
+		es.onmessage = (e) => {
+			events = [...events, JSON.parse(e.data)];
+		};
+
+		es.onerror = () => {
+			es.close();
+		};
+	});
 </script>
 
-<p>{data}</p>
+{#each events as event}
+<p>{event}</p>
+{/each}
